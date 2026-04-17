@@ -12,10 +12,10 @@ const AppState = {
   transcript: '',
   audioBlob: null,
   voices: [],
-  currentLang: 'en-US', // Default language
+  currentLang: 'en-US', // Default STT language
 };
 
-// Supported Languages for STT and TTS
+// Supported Languages for STT (Speech Recognition)
 const SUPPORTED_LANGS = [
   { code: 'en-US', name: 'English (US)' },
   { code: 'hi-IN', name: 'Hindi (India)' },
@@ -23,7 +23,9 @@ const SUPPORTED_LANGS = [
   { code: 'fr-FR', name: 'French (France)' },
   { code: 'de-DE', name: 'German (Germany)' },
   { code: 'ja-JP', name: 'Japanese (Japan)' },
-  { code: 'zh-CN', name: 'Chinese (Mandarin)' }
+  { code: 'zh-CN', name: 'Chinese (Mandarin)' },
+  { code: 'ru-RU', name: 'Russian (Russia)' },
+  { code: 'pt-BR', name: 'Portuguese (Brazil)' }
 ];
 
 /* ============================================================
@@ -237,14 +239,14 @@ const SpeechEngine = {
   startRecognition(langCode, onResult, onError, onEnd) {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      onError('Speech recognition not supported in this browser. Try Chrome or Edge.');
+      onError('Speech recognition not supported. Use Chrome/Edge.');
       return;
     }
 
     const rec = new SpeechRecognition();
     rec.continuous = true;
     rec.interimResults = true;
-    rec.lang = langCode; // Use selected language
+    rec.lang = langCode;
     rec.maxAlternatives = 1;
     this.recognition = rec;
 
@@ -265,10 +267,18 @@ const SpeechEngine = {
 
     rec.onerror = (event) => {
       clearInterval(this.waveInterval);
-      let msg = 'Recognition error: ' + event.error;
-      if (event.error === 'not-allowed') msg = 'Microphone permission denied. Please allow access in your browser settings.';
-      if (event.error === 'no-speech') msg = 'No speech detected. Please try again.';
-      if (event.error === 'network') msg = 'Network error. If using Web Speech API, ensure you’re on localhost/HTTPS. Azure users: check endpoint/key.';
+      let msg = 'Error: ' + event.error;
+
+      // Specific handling for common errors
+      if (event.error === 'not-allowed') {
+        msg = 'Microphone permission denied. Please allow access in browser settings.';
+      } else if (event.error === 'no-speech') {
+        msg = 'No speech detected. Try again.';
+      } else if (event.error === 'network') {
+        // This usually happens if running from file:// protocol
+        msg = 'Network error. Ensure you are running on localhost or HTTPS, not file://.';
+      }
+
       onError(msg);
     };
 
@@ -280,7 +290,7 @@ const SpeechEngine = {
     try {
       rec.start();
     } catch (e) {
-      onError('Failed to start microphone. Please ensure permissions are granted.');
+      onError('Failed to start microphone. Check permissions.');
     }
   },
   stopRecognition() {
@@ -341,51 +351,56 @@ async function loadVoicesAndLanguages() {
     });
   }
 
-  // 2. Populate TTS Voice Dropdown (Filtered by selected language initially)
-  updateTTSVoiceDropdown(AppState.currentLang);
+  // 2. Populate TTS Voice Dropdown (Load ALL voices)
+  updateTTSVoiceDropdown();
 }
 
-function updateTTSVoiceDropdown(langCode) {
+function updateTTSVoiceDropdown() {
   const ttsVoiceSelect = $id('voice-select');
   if (!ttsVoiceSelect) return;
 
   ttsVoiceSelect.innerHTML = '';
 
-  // Filter voices that match the selected language code (e.g., 'hi-IN')
-  const relevantVoices = AppState.voices.filter(v =>
-    v.lang.toLowerCase().includes(langCode.split('-')[0].toLowerCase())
-  );
+  // Sort voices by language then name
+  const sortedVoices = AppState.voices.sort((a, b) => {
+    return a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name);
+  });
 
-  if (relevantVoices.length === 0) {
+  if (sortedVoices.length === 0) {
     const opt = document.createElement('option');
-    opt.textContent = 'No specific voices found for this language. Using default.';
-    opt.disabled = true;
+    opt.textContent = 'No voices found';
     ttsVoiceSelect.appendChild(opt);
-    // Add all voices as fallback
-    AppState.voices.forEach((v, i) => {
-      const optAll = document.createElement('option');
-      optAll.value = i;
-      optAll.textContent = `${v.name} (${v.lang})`;
-      ttsVoiceSelect.appendChild(optAll);
-    });
-  } else {
-    relevantVoices.forEach(v => {
-      // Find original index in AppState.voices
-      const originalIndex = AppState.voices.indexOf(v);
-      const opt = document.createElement('option');
-      opt.value = originalIndex;
-
-      // Heuristic for gender icon
-      const nameLower = v.name.toLowerCase();
-      const genderHint = (nameLower.includes('female') || nameLower.includes('zira') ||
-        nameLower.includes('samantha') || nameLower.includes('victoria') ||
-        nameLower.includes('karen') || nameLower.includes('moira'))
-        ? '♀' : '♂';
-
-      opt.textContent = `${genderHint} ${v.name}`;
-      ttsVoiceSelect.appendChild(opt);
-    });
+    return;
   }
+
+  // Group by Language for cleaner UI
+  let currentLangGroup = '';
+  let currentOptGroup = null;
+
+  sortedVoices.forEach((v, i) => {
+    // Find original index in AppState.voices to keep reference correct
+    const originalIndex = AppState.voices.indexOf(v);
+
+    // Create OptGroup if language changes
+    if (v.lang !== currentLangGroup) {
+      currentLangGroup = v.lang;
+      currentOptGroup = document.createElement('optgroup');
+      currentOptGroup.label = v.lang; // e.g., "hi-IN"
+      ttsVoiceSelect.appendChild(currentOptGroup);
+    }
+
+    const opt = document.createElement('option');
+    opt.value = originalIndex;
+
+    // Gender hint
+    const nameLower = v.name.toLowerCase();
+    const genderHint = (nameLower.includes('female') || nameLower.includes('zira') ||
+      nameLower.includes('samantha') || nameLower.includes('victoria'))
+      ? '♀' : '♂';
+
+    opt.textContent = `${genderHint} ${v.name}`;
+    currentOptGroup.appendChild(opt);
+  });
 }
 
 /* ============================================================
@@ -503,9 +518,7 @@ function initSTT() {
   if (sttLangSelect) {
     sttLangSelect.addEventListener('change', (e) => {
       AppState.currentLang = e.target.value;
-      // Also update TTS voices to match this language preference
-      updateTTSVoiceDropdown(AppState.currentLang);
-      Toast.info(`Language changed to ${e.target.options[e.target.selectedIndex].text}`);
+      Toast.info(`STT Language changed to ${e.target.options[e.target.selectedIndex].text}`);
     });
   }
 
@@ -521,7 +534,7 @@ function initSTT() {
         if (AppState.transcript) Toast.success('Transcript ready.');
       } else {
         // Start
-        // Request permission explicitly if needed (browser handles this on start(), but we can check state)
+        // Request permission explicitly
         navigator.mediaDevices.getUserMedia({ audio: true })
           .then(() => {
             AppState.isRecording = true;
@@ -645,7 +658,7 @@ function initTTS() {
           clearInterval(progressInterval);
           UI.setTTSProgress(100, 'Playing…');
           Toast.success('Audio synthesis complete.');
-          if (downloadBtn) downloadBtn.disabled = true; // Web Speech API doesn't support download
+          if (downloadBtn) downloadBtn.disabled = true;
         },
         // onEnd
         () => {
